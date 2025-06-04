@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from typing import Type
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from finrl import config
 from finrl.meta.env_stock_trading.env_stocktrading import StockTradingEnv
 from finrl.meta.preprocessor.preprocessors import data_split
+
+import statistics
 
 MODELS = {"a2c": A2C, "ddpg": DDPG, "td3": TD3, "sac": SAC, "ppo": PPO}
 
@@ -55,23 +58,33 @@ class TensorboardCallback(BaseCallback):
         return True
 
     def _on_rollout_end(self) -> bool:
-        try:
-            rollout_buffer_rewards = self.locals["rollout_buffer"].rewards.flatten()
-            self.logger.record(
-                key="train/reward_min", value=min(rollout_buffer_rewards)
-            )
-            self.logger.record(
-                key="train/reward_mean", value=statistics.mean(rollout_buffer_rewards)
-            )
-            self.logger.record(
-                key="train/reward_max", value=max(rollout_buffer_rewards)
-            )
-        except BaseException as error:
-            # Handle the case where "rewards" is not found
-            self.logger.record(key="train/reward_min", value=None)
-            self.logger.record(key="train/reward_mean", value=None)
-            self.logger.record(key="train/reward_max", value=None)
-            print("Logging Error:", error)
+        # Only log rollout_buffer stats if rollout_buffer exists (A2C, PPO)
+        rollout_buffer = self.locals.get("rollout_buffer", None)
+        if rollout_buffer is not None and hasattr(rollout_buffer, "rewards"):
+            try:
+                rollout_buffer_rewards = rollout_buffer.rewards.flatten()
+                self.logger.record(
+                    key="train/reward_min", value=min(rollout_buffer_rewards)
+                )
+                self.logger.record(
+                    key="train/reward_mean", value=statistics.mean(rollout_buffer_rewards)
+                )
+                self.logger.record(
+                    key="train/reward_max", value=max(rollout_buffer_rewards)
+                )
+            except BaseException as error:
+                self.logger.record(key="train/reward_min", value=None)
+                self.logger.record(key="train/reward_mean", value=None)
+                self.logger.record(key="train/reward_max", value=None)
+                print("Logging Error (rollout_buffer present):", error)
+        else:
+            # For off-policy algorithms (DDPG, TD3, SAC), skip rollout_buffer logging
+            if "rollout_buffer" not in self.locals:
+                print("rollout_buffer not in self.locals; skipping logging.")
+            elif rollout_buffer is None:
+                print("rollout_buffer is None; skipping logging.")
+            else:
+                print("rollout_buffer present but missing 'rewards' attribute; skipping logging.")
         return True
 
 
@@ -137,7 +150,7 @@ class DRLAgent:
         tb_log_name,
         total_timesteps=5000,
         callbacks: Type[BaseCallback] = None,
-    ):  # this function is static method, so it can be called without creating an instance of the class
+    ):
         model = model.learn(
             total_timesteps=total_timesteps,
             tb_log_name=tb_log_name,
